@@ -63,6 +63,7 @@ CUMULATIVE = 'cumulative'
 
 NULL_CONNECTED = 'connected'
 NULL_AS_ZERO = 'null as zero'
+NULL_AS_NULL = 'null'
 
 FLOT = 'flot'
 
@@ -95,6 +96,7 @@ SECONDS_FORMAT = "s"
 MILLISECONDS_FORMAT = "ms"
 SHORT_FORMAT = "short"
 BYTES_FORMAT = "bytes"
+BYTES_PER_SECOND_FORMAT = "Bps"
 
 # Alert rule state
 STATE_NO_DATA = "no_data"
@@ -315,6 +317,7 @@ class Row(object):
     height = attr.ib(default=DEFAULT_ROW_HEIGHT, validator=instance_of(Pixels))
     showTitle = attr.ib(default=None)
     title = attr.ib(default=None)
+    repeat = attr.ib(default=None)
 
     def _iter_panels(self):
         return iter(self.panels)
@@ -332,6 +335,7 @@ class Row(object):
             'panels': self.panels,
             'showTitle': showTitle,
             'title': title,
+            'repeat': self.repeat,
         }
 
 
@@ -376,13 +380,19 @@ class Template(object):
         :param label: the variable's human label
         :param name: the variable's name
         :param query: the query users to fetch the valid values of the variable
+        :param regex: a regex to filter the query results by
+        :param multi: allow multiple selections
+        :param includeAll: allow 'All' selection
     """
 
     default = attr.ib()
     dataSource = attr.ib()
-    label = attr.ib()
     name = attr.ib()
     query = attr.ib()
+    label = attr.ib(default='')
+    regex = attr.ib(default='')
+    multi = attr.ib(default=False)
+    includeAll = attr.ib(default=False)
 
     def to_json_data(self):
         return {
@@ -394,20 +404,103 @@ class Template(object):
             },
             'datasource': self.dataSource,
             'hide': 0,
-            'includeAll': False,
+            'includeAll': self.includeAll,
             'label': self.label,
-            'multi': False,
+            'multi': self.multi,
             'name': self.name,
             'options': [],
             'query': self.query,
             'refresh': 1,
-            'regex': '',
+            'regex': self.regex,
             'sort': 1,
             'tagValuesQuery': None,
             'tagsQuery': None,
             'type': 'query',
         }
 
+@attr.s
+class TemplateDataSource(object):
+    """TemplateDataSource create a new 'variable' for the dashboard
+    whose values are the datasource names in the Grafana DB.
+
+        :param default: the default value for the variable
+        :param name: the variable's name
+        :param query: the type of datasource to query, e.g. 'prometheus'
+        :param label: the variable's human label
+        :param regex: a regex to filter the datasource names by
+    """
+
+    default = attr.ib()
+    name = attr.ib()
+    query = attr.ib()
+    label = attr.ib(default='')
+    regex = attr.ib(default='')
+
+    def to_json_data(self):
+        return {
+            'current': {
+                'text': self.default,
+                'value': self.default,
+                'tags': [],
+            },
+            'hide': 0,
+            'label': self.label,
+            'name': self.name,
+            'options': [],
+            'query': self.query,
+            'refresh': 1,
+            'regex': self.regex,
+            'sort': 1,
+            'type': 'datasource',
+        }
+
+@attr.s
+class TemplateNoQuery(object):
+    """TemplateNoQuery create a new 'variable' for the dashboard whose
+    values are predefined.
+
+        :param default: the default value for the variable
+        :param name: the variable's name
+        :param type: the variable's type, 'custom' or 'interval'
+        :param label: the variable's human label
+        :param values: the list of values the variable may have
+
+    Only valid for type 'custom':
+        :param multi: allow multiple selections
+        :param includeAll: allow 'All' selection, with allValue of '.+'
+    """
+    default = attr.ib()
+    name = attr.ib()
+    type = attr.ib()
+    label = attr.ib(default='')
+    values = attr.ib(default=attr.Factory(list))
+    multi = attr.ib(default=False)
+    includeAll = attr.ib(default=False)
+
+    def to_json_data(self):
+        tmpl = {
+            'current': {
+                'text': self.default,
+                'value': self.default,
+            },
+            'hide': 0,
+            'label': self.label,
+            'name': self.name,
+            'options': [{'selected': i==self.default, 'text': i, 'value': i} for i in self.values],
+            'query': ','.join(self.values),
+            'type': self.type,
+            'includeAll': False,
+            'multi': False,
+        }
+
+        if self.type == 'interval':
+            tmpl['auto'] = False
+        elif self.type == 'custom':
+            tmpl['multi'] = self.multi
+            if self.includeAll:
+                tmpl['allValue'] = '.+'
+                tmpl['includeAll'] = True
+        return tmpl
 
 @attr.s
 class Templating(object):
