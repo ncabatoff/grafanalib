@@ -20,8 +20,6 @@ percentile latency:
 
 .. code-block:: python
 
-  import itertools
-
   from grafanalib.core import *
 
 
@@ -96,15 +94,7 @@ percentile latency:
               refId='B',
             ),
           ],
-          yAxes=[
-            YAxis(
-              format=SECONDS_FORMAT,
-            ),
-            YAxis(
-              format=SHORT_FORMAT,
-              show=False,
-            )
-          ],
+          yAxes=single_y_axis(format=SECONDS_FORMAT),
         ),
       ]),
     ],
@@ -140,3 +130,27 @@ This library is in its very early stages. We'll probably make changes that
 break backwards compatibility, although we'll try hard not to.
 
 grafanalib works with Python 3.4 and 3.5.
+
+Developing
+==========
+If you're working on the project, and need to build from source, it's done as follows:
+
+.. code-block:: console
+
+  $ virtualenv .env
+  $ . ./.env/bin/activate
+  $ pip install -e .
+
+`gfdatasource`
+==============
+
+This module also provides a script and docker image which can configure grafana
+with new sources, or enable app plugins.
+
+The script answers the `--help` with full usage information, but basic
+invocation looks like this:
+
+.. code-block:: console
+
+  $ <gfdatasource> --grafana-url http://grafana. datasource --data-source-url http://datasource
+  $ <gfdatasource> --grafana-url http://grafana. app --id my-plugin

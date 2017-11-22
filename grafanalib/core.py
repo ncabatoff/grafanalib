@@ -10,6 +10,7 @@ from attr.validators import instance_of
 import itertools
 import math
 from numbers import Number
+import warnings
 
 
 @attr.s
@@ -67,9 +68,11 @@ NULL_AS_NULL = 'null'
 
 FLOT = 'flot'
 
+ABSOLUTE_TYPE = 'absolute'
 DASHBOARD_TYPE = 'dashboard'
 GRAPH_TYPE = 'graph'
 SINGLESTAT_TYPE = 'singlestat'
+TEXT_TYPE = 'text'
 
 DEFAULT_FILL = 1
 DEFAULT_REFRESH = '10s'
@@ -96,7 +99,8 @@ SECONDS_FORMAT = "s"
 MILLISECONDS_FORMAT = "ms"
 SHORT_FORMAT = "short"
 BYTES_FORMAT = "bytes"
-BYTES_PER_SECOND_FORMAT = "Bps"
+BITS_PER_SEC_FORMAT = "bps"
+BYTES_PER_SEC_FORMAT = "Bps"
 
 # Alert rule state
 STATE_NO_DATA = "no_data"
@@ -125,6 +129,19 @@ CTYPE_QUERY = "query"
 # Operator
 OP_AND = "and"
 OP_OR = "or"
+
+# Text panel modes
+TEXT_MODE_MARKDOWN = "markdown"
+TEXT_MODE_HTML = "html"
+TEXT_MODE_TEXT = "text"
+
+# Datasource plugins
+PLUGIN_ID_GRAPHITE = "graphite"
+PLUGIN_ID_PROMETHEUS = "prometheus"
+PLUGIN_ID_INFLUXDB = "influxdb"
+PLUGIN_ID_OPENTSDB = "opentsdb"
+PLUGIN_ID_ELASTICSEARCH = "elasticsearch"
+PLUGIN_ID_CLOUDWATCH = "cloudwatch"
 
 
 @attr.s
@@ -217,6 +234,7 @@ class Target(object):
 
     expr = attr.ib()
     legendFormat = attr.ib(default="")
+    interval = attr.ib(default="", validator=instance_of(str))
     intervalFactor = attr.ib(default=2)
     metric = attr.ib(default="")
     refId = attr.ib(default="")
@@ -225,6 +243,7 @@ class Target(object):
     def to_json_data(self):
         return {
             'expr': self.expr,
+            'interval': self.interval,
             'intervalFactor': self.intervalFactor,
             'legendFormat': self.legendFormat,
             'metric': self.metric,
@@ -273,6 +292,11 @@ class XAxis(object):
 
 @attr.s
 class YAxis(object):
+    """A single Y axis.
+
+    Grafana graphs have two Y axes: one on the left and one on the right.
+    """
+    decimals = attr.ib(default=None)
     format = attr.ib(default=None)
     label = attr.ib(default=None)
     logBase = attr.ib(default=1)
@@ -282,6 +306,7 @@ class YAxis(object):
 
     def to_json_data(self):
         return {
+            'decimals': self.decimals,
             'format': self.format,
             'label': self.label,
             'logBase': self.logBase,
@@ -289,6 +314,61 @@ class YAxis(object):
             'min': self.min,
             'show': self.show,
         }
+
+
+@attr.s
+class YAxes(object):
+    """The pair of Y axes on a Grafana graph.
+
+    Each graph has two Y Axes, a left one and a right one.
+    """
+    left = attr.ib(default=attr.Factory(lambda: YAxis(format=SHORT_FORMAT)),
+                   validator=instance_of(YAxis))
+    right = attr.ib(default=attr.Factory(lambda: YAxis(format=SHORT_FORMAT)),
+                    validator=instance_of(YAxis))
+
+    def to_json_data(self):
+        return [
+            self.left,
+            self.right,
+        ]
+
+
+def single_y_axis(**kwargs):
+    """Specify that a graph has a single Y axis.
+
+    Parameters are those passed to `YAxis`. Returns a `YAxes` object (i.e. a
+    pair of axes) that can be used as the yAxes parameter of a graph.
+    """
+    axis = YAxis(**kwargs)
+    return YAxes(left=axis)
+
+
+def to_y_axes(data):
+    """Backwards compatibility for 'YAxes'.
+
+    In grafanalib 0.1.2 and earlier, Y axes were specified as a list of two
+    elements. Now, we have a dedicated `YAxes` type.
+
+    This function converts a list of two `YAxis` values to a `YAxes` value,
+    silently passes through `YAxes` values, warns about doing things the old
+    way, and errors when there are invalid values.
+    """
+    if isinstance(data, YAxes):
+        return data
+    if not isinstance(data, (list, tuple)):
+        raise ValueError(
+            "Y axes must be either YAxes or a list of two values, got %r"
+            % data)
+    if len(data) != 2:
+        raise ValueError(
+            "Must specify exactly two YAxes, got %d: %r"
+            % (len(data), data))
+    warnings.warn(
+        "Specify Y axes using YAxes or single_y_axis, rather than a "
+        "list/tuple",
+        DeprecationWarning, stacklevel=3)
+    return YAxes(left=data[0], right=data[1])
 
 
 def _balance_panels(panels):
@@ -326,8 +406,13 @@ class Row(object):
         return attr.assoc(self, panels=list(map(f, self.panels)))
 
     def to_json_data(self):
-        showTitle = False if self.title is None else True
-        title = "New row" if self.title is None else self.title
+        showTitle = False
+        title = "New row"
+        if self.title is not None:
+            showTitle = True
+            title = self.title
+        if self.showTitle is not None:
+            showTitle = self.showTitle
         return {
             'collapse': self.collapse,
             'editable': self.editable,
@@ -350,6 +435,42 @@ class Annotations(object):
 
 
 @attr.s
+class DataSourceInput(object):
+    name = attr.ib()
+    label = attr.ib()
+    pluginId = attr.ib()
+    pluginName = attr.ib()
+    description = attr.ib(default="", validator=instance_of(str))
+
+    def to_json_data(self):
+        return {
+            "description": self.description,
+            "label": self.label,
+            "name": self.name,
+            "pluginId": self.pluginId,
+            "pluginName": self.pluginName,
+            "type": "datasource",
+        }
+
+
+@attr.s
+class ConstantInput(object):
+    name = attr.ib()
+    label = attr.ib()
+    value = attr.ib()
+    description = attr.ib(default="", validator=instance_of(str))
+
+    def to_json_data(self):
+        return {
+            "description": self.description,
+            "label": self.label,
+            "name": self.name,
+            "type": "constant",
+            "value": self.value,
+        }
+
+
+@attr.s
 class DashboardLink(object):
     dashboard = attr.ib()
     uri = attr.ib()
@@ -358,6 +479,7 @@ class DashboardLink(object):
         validator=instance_of(bool),
     )
     title = attr.ib(default=None)
+    type = attr.ib(default=DASHBOARD_TYPE)
 
     def to_json_data(self):
         title = self.dashboard if self.title is None else self.title
@@ -366,7 +488,8 @@ class DashboardLink(object):
             "dashboard": self.dashboard,
             "keepTime": self.keepTime,
             "title": title,
-            "type": DASHBOARD_TYPE,
+            "type": self.type,
+            "url": self.uri,
         }
 
 
@@ -380,23 +503,35 @@ class Template(object):
         :param label: the variable's human label
         :param name: the variable's name
         :param query: the query users to fetch the valid values of the variable
-        :param regex: a regex to filter the query results by
-        :param multi: allow multiple selections
-        :param includeAll: allow 'All' selection
+        :param allValue: specify a custom all value with regex,
+            globs or lucene syntax.
+        :param includeAll: Add a special All option whose value includes
+            all options.
+        :param regex: Regex to filter or capture specific parts of the names
+            return by your data source query.
+        :param multi: If enabled, the variable will support the selection of
+            multiple options at the same time.
     """
 
     default = attr.ib()
     dataSource = attr.ib()
     name = attr.ib()
     query = attr.ib()
-    label = attr.ib(default='')
-    regex = attr.ib(default='')
-    multi = attr.ib(default=False)
-    includeAll = attr.ib(default=False)
+    label = attr.ib(default=None)
+    allValue = attr.ib(default=None)
+    includeAll = attr.ib(
+        default=False,
+        validator=instance_of(bool),
+    )
+    multi = attr.ib(
+        default=False,
+        validator=instance_of(bool),
+    )
+    regex = attr.ib(default=None)
 
     def to_json_data(self):
         return {
-            'allValue': None,
+            'allValue': self.allValue,
             'current': {
                 'text': self.default,
                 'value': self.default,
@@ -643,7 +778,9 @@ class AlertCondition(object):
     type = attr.ib(default=CTYPE_QUERY)
 
     def to_json_data(self):
-        queryParams = [self.target.refId, self.timeRange.from_time, self.timeRange.to_time]
+        queryParams = [
+            self.target.refId, self.timeRange.from_time, self.timeRange.to_time
+        ]
         return {
             "evaluator": self.evaluator,
             "operator": {
@@ -705,6 +842,7 @@ class Dashboard(object):
         validator=instance_of(bool),
     )
     id = attr.ib(default=None)
+    inputs = attr.ib(default=attr.Factory(list))
     links = attr.ib(default=attr.Factory(list))
     refresh = attr.ib(default=DEFAULT_REFRESH)
     schemaVersion = attr.ib(default=SCHEMA_VERSION)
@@ -754,6 +892,7 @@ class Dashboard(object):
 
     def to_json_data(self):
         return {
+            '__inputs': self.inputs,
             'annotations': self.annotations,
             'editable': self.editable,
             'gnetId': self.gnetId,
@@ -783,6 +922,7 @@ class Graph(object):
     targets = attr.ib()
     aliasColors = attr.ib(default=attr.Factory(dict))
     bars = attr.ib(default=False, validator=instance_of(bool))
+    description = attr.ib(default=None)
     editable = attr.ib(default=True, validator=instance_of(bool))
     error = attr.ib(default=False, validator=instance_of(bool))
     fill = attr.ib(default=1, validator=instance_of(int))
@@ -811,10 +951,14 @@ class Graph(object):
         default=attr.Factory(Tooltip),
         validator=instance_of(Tooltip),
     )
+    transparent = attr.ib(default=False, validator=instance_of(bool))
     xAxis = attr.ib(default=attr.Factory(XAxis), validator=instance_of(XAxis))
     # XXX: This isn't a *good* default, rather it's the default Grafana uses.
     yAxes = attr.ib(
-        default=attr.Factory(lambda: [YAxis(format=SHORT_FORMAT)] * 2))
+        default=attr.Factory(YAxes),
+        convert=to_y_axes,
+        validator=instance_of(YAxes),
+    )
     alert = attr.ib(default=None)
 
     def to_json_data(self):
@@ -822,6 +966,7 @@ class Graph(object):
             'aliasColors': self.aliasColors,
             'bars': self.bars,
             'datasource': self.dataSource,
+            'description': self.description,
             'editable': self.editable,
             'error': self.error,
             'fill': self.fill,
@@ -846,6 +991,7 @@ class Graph(object):
             'timeShift': self.timeShift,
             'title': self.title,
             'tooltip': self.tooltip,
+            'transparent': self.transparent,
             'type': GRAPH_TYPE,
             'xaxis': self.xAxis,
             'yaxes': self.yAxes,
@@ -915,6 +1061,37 @@ class Gauge(object):
             'show': self.show,
             'thresholdLabels': self.thresholdLabels,
             'thresholdMarkers': self.thresholdMarkers,
+        }
+
+
+@attr.s
+class Text(object):
+    """Generates a Text panel."""
+
+    content = attr.ib()
+    editable = attr.ib(default=True, validator=instance_of(bool))
+    error = attr.ib(default=False, validator=instance_of(bool))
+    height = attr.ib(default=None)
+    id = attr.ib(default=None)
+    links = attr.ib(default=attr.Factory(list))
+    mode = attr.ib(default=TEXT_MODE_MARKDOWN)
+    span = attr.ib(default=None)
+    title = attr.ib(default="")
+    transparent = attr.ib(default=False, validator=instance_of(bool))
+
+    def to_json_data(self):
+        return {
+            'content': self.content,
+            'editable': self.editable,
+            'error': self.error,
+            'height': self.height,
+            'id': self.id,
+            'links': self.links,
+            'mode': self.mode,
+            'span': self.span,
+            'title': self.title,
+            'transparent': self.transparent,
+            'type': TEXT_TYPE,
         }
 
 
